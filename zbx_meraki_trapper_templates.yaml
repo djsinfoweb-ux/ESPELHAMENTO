@@ -1,0 +1,315 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: a571c0d144b14fd4a87a9d9b2aa9fcd6
+      name: Templates/Applications
+    - uuid: 7fa012e996dc407098aedaec8cc47906
+      name: 'Templates/Network devices'
+  host_groups:
+    - uuid: 6f6799aa69e844b4b3918f779f2abf08
+      name: 'Protege/Access Point'
+  templates:
+    - uuid: fc523193a83942d794a19052dc734179
+      template: 'Cisco Meraki collector by Zabbix trapper'
+      name: 'Cisco Meraki collector by Zabbix trapper'
+      description: |
+        Recebe dados do script meraki_zabbix_collector.py via zabbix_sender.
+        O script faz 2-3 chamadas org-wide na API Meraki por ciclo (a cada 5 min)
+        em vez de N chamadas por dispositivo, evitando o rate limit de
+        10 req/s por organizacao.
+
+        Linkar este template em UM host (ex.: "Meraki-Collector").
+        O nome do host deve bater com ZBX_COLLECTOR_HOST no script.
+      groups:
+        - name: Templates/Applications
+        - name: 'Templates/Network devices'
+      items:
+        - uuid: 49cc17400c3c42a3b30c5e131dae1d17
+          name: 'Collector errors'
+          type: TRAP
+          key: meraki.trap.errors
+          value_type: TEXT
+          history: 7d
+          trends: '0'
+          description: 'Erros reportados pelo script coletor.'
+          tags:
+            - tag: component
+              value: error
+          triggers:
+            - uuid: fa2cc79d09c94c69b4f8955ea2a18438
+              expression: 'length(last(/Cisco Meraki collector by Zabbix trapper/meraki.trap.errors))>0'
+              name: 'Meraki collector: erros na coleta'
+              priority: WARNING
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: 86c6b5cb7a2c4ae2bf153aff3090f96f
+          name: 'Collector heartbeat (devices JSON)'
+          type: TRAP
+          key: meraki.trap.discovery.raw
+          value_type: TEXT
+          history: 1d
+          trends: '0'
+          description: 'Copia do JSON de discovery apenas para heartbeat/nodata.'
+          tags:
+            - tag: component
+              value: raw
+          triggers:
+            - uuid: ab2aac456bf945bbb6d5db20c65810f5
+              expression: 'nodata(/Cisco Meraki collector by Zabbix trapper/meraki.trap.discovery.raw,30m)=1'
+              name: 'Meraki collector: sem dados ha mais de 30 minutos'
+              priority: HIGH
+              description: 'O script coletor parou de enviar dados. Verifique o cron e o log.'
+              tags:
+                - tag: scope
+                  value: availability
+      discovery_rules:
+        - uuid: 1d6d5dd9516845e7a6e40ae003129d7b
+          name: 'Meraki devices discovery (trapper)'
+          type: TRAP
+          key: meraki.trap.discovery
+          lifetime: 7d
+          description: 'Recebe a lista de devices do script e cria um host por serial.'
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#NAME}'
+                value: '{$MERAKI.DEVICE.NAME.MATCHES}'
+                formulaid: A
+              - macro: '{#NAME}'
+                value: '{$MERAKI.DEVICE.NAME.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+                formulaid: B
+              - macro: '{#STATUS}'
+                value: '{$MERAKI.DEVICE.STATUS.MATCHES}'
+                formulaid: C
+              - macro: '{#STATUS}'
+                value: '{$MERAKI.DEVICE.STATUS.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+                formulaid: D
+          host_prototypes:
+            - uuid: 05eccf9587794394af30da49b1328622
+              host: '{#SERIAL}'
+              name: 'Protege - [{#SERIAL}] {#NAME}'
+              group_links:
+                - group:
+                    name: 'Protege/Access Point'
+              templates:
+                - name: 'Cisco Meraki device by Zabbix trapper'
+              macros:
+                - macro: '{$MAC}'
+                  value: '{#MAC}'
+                  description: 'MAC address of the device.'
+                - macro: '{$NETWORK.ID}'
+                  value: '{#NETWORK.ID}'
+                  description: 'Network ID of the device.'
+                - macro: '{$ORGANIZATION_ID}'
+                  value: '{#ORGANIZATION_ID}'
+                  description: 'Organization ID of the device.'
+                - macro: '{$SERIAL}'
+                  value: '{#SERIAL}'
+                  description: 'Serial number of the device.'
+              tags:
+                - tag: model
+                  value: '{#MODEL}'
+                - tag: organization
+                  value: '{#ORGANIZATION_NAME}'
+                - tag: serial-number
+                  value: '{#SERIAL}'
+                - tag: type
+                  value: '{#PRODUCT_TYPE}'
+      macros:
+        - macro: '{$MERAKI.DEVICE.NAME.MATCHES}'
+          value: .+
+          description: 'Filtro de discovery por nome do device.'
+        - macro: '{$MERAKI.DEVICE.NAME.NOT_MATCHES}'
+          value: CHANGE_IF_NEEDED
+          description: 'Filtro de exclusao de discovery por nome.'
+        - macro: '{$MERAKI.DEVICE.STATUS.MATCHES}'
+          value: '.*'
+          description: 'Filtro de discovery por status.'
+        - macro: '{$MERAKI.DEVICE.STATUS.NOT_MATCHES}'
+          value: CHANGE_IF_NEEDED
+          description: 'Filtro de exclusao de discovery por status.'
+      tags:
+        - tag: class
+          value: network
+        - tag: target
+          value: cisco-meraki-dashboard
+    - uuid: a138b0e97f6c4c1fbe8eabc4a9f0a5ea
+      template: 'Cisco Meraki device by Zabbix trapper'
+      name: 'Cisco Meraki device by Zabbix trapper'
+      description: |
+        Itens trapper populados pelo script meraki_zabbix_collector.py.
+        Nenhuma requisicao HTTP e feita por este template - zero consumo
+        de rate limit da API Meraki por host.
+      groups:
+        - name: Templates/Applications
+        - name: 'Templates/Network devices'
+      items:
+        - uuid: 02415a6caec3454784add0e4f871f54b
+          name: status
+          type: TRAP
+          key: meraki.device.status
+          description: |
+            Device operational status
+            Network: {$NETWORK.ID}
+            MAC: {$MAC}
+          valuemap:
+            name: 'Device status'
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: 0870753b4ca04ae1b02faa64954099a9
+              expression: 'last(/Cisco Meraki device by Zabbix trapper/meraki.device.status)<>1'
+              name: 'Meraki: Status is not online'
+              priority: AVERAGE
+              tags:
+                - tag: scope
+                  value: availability
+            - uuid: efe96a6e838e436b865f0e5d2570f1a7
+              expression: 'nodata(/Cisco Meraki device by Zabbix trapper/meraki.device.status,30m)=1'
+              name: 'Meraki: sem dados de status ha 30 minutos'
+              priority: WARNING
+              description: 'O coletor nao enviou status para este device. Verifique o script.'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: 615d28ec8a2a4489934de3ed71a34124
+          name: 'public IP'
+          type: TRAP
+          key: meraki.device.public.ip
+          value_type: CHAR
+          trends: '0'
+          description: |
+            Device public IP
+            Network: {$NETWORK.ID}
+            MAC: {$MAC}
+          tags:
+            - tag: component
+              value: network
+      discovery_rules:
+        - uuid: dc2e740830ab4b2aa034090facda9f4b
+          name: 'Uplinks loss and quality discovery (trapper)'
+          type: TRAP
+          key: meraki.trap.uplinks
+          lifetime: 7d
+          description: 'Recebe a lista de uplinks (IP destino + interface) do script.'
+          filter:
+            evaltype: AND
+            conditions:
+              - macro: '{#IP}'
+                value: '{$MERAKI.DEVICE.LOSS.LATENCY.IP.MATCHES}'
+                formulaid: A
+              - macro: '{#IP}'
+                value: '{$MERAKI.DEVICE.LOSS.LATENCY.IP.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+                formulaid: B
+              - macro: '{#UPLINK}'
+                value: '{$MERAKI.DEVICE.UPLINK.MATCHES}'
+                formulaid: C
+              - macro: '{#UPLINK}'
+                value: '{$MERAKI.DEVICE.UPLINK.NOT_MATCHES}'
+                operator: NOT_MATCHES_REGEX
+                formulaid: D
+          item_prototypes:
+            - uuid: 6d217839c97743d2aea75c0a798c05f8
+              name: 'Uplink [{#IP}]: [{#UPLINK}]: Latency'
+              type: TRAP
+              key: 'meraki.device.latency[{#IP},{#UPLINK}]'
+              value_type: FLOAT
+              units: s
+              description: 'Latency of the device uplink (enviado pelo coletor, em segundos).'
+              tags:
+                - tag: component
+                  value: network
+                - tag: ip
+                  value: '{#IP}'
+                - tag: uplink
+                  value: '{#UPLINK}'
+              trigger_prototypes:
+                - uuid: afdc45976bbf4caebba4493e6885c688
+                  expression: 'min(/Cisco Meraki device by Zabbix trapper/meraki.device.latency[{#IP},{#UPLINK}],#3)>{$MERAKI.DEVICE.LATENCY}'
+                  name: 'Meraki: Uplink [{#IP}]: [{#UPLINK}]: latency > {$MERAKI.DEVICE.LATENCY}'
+                  priority: WARNING
+                  tags:
+                    - tag: scope
+                      value: performance
+            - uuid: d6f1b232f7de4c4fa2c25fd1398cda44
+              name: 'Uplink [{#IP}]: [{#UPLINK}]: Loss, %'
+              type: TRAP
+              key: 'meraki.device.loss.pct[{#IP},{#UPLINK}]'
+              value_type: FLOAT
+              units: '%'
+              description: 'Loss percent of the device uplink (enviado pelo coletor).'
+              tags:
+                - tag: component
+                  value: network
+                - tag: ip
+                  value: '{#IP}'
+                - tag: uplink
+                  value: '{#UPLINK}'
+              trigger_prototypes:
+                - uuid: 76aff7b8b71442e3984736c5fb5c698a
+                  expression: 'min(/Cisco Meraki device by Zabbix trapper/meraki.device.loss.pct[{#IP},{#UPLINK}],#3)>{$MERAKI.DEVICE.LOSS}'
+                  name: 'Meraki: Uplink [{#IP}]: [{#UPLINK}]: loss > {$MERAKI.DEVICE.LOSS}%'
+                  priority: WARNING
+                  tags:
+                    - tag: scope
+                      value: performance
+          graph_prototypes:
+            - uuid: 7e0c013434504b88898b7a942d859ce5
+              name: 'Uplink [{#IP}]: [{#UPLINK}]: Latency'
+              ymin_type_1: FIXED
+              graph_items:
+                - color: 199C0D
+                  item:
+                    host: 'Cisco Meraki device by Zabbix trapper'
+                    key: 'meraki.device.latency[{#IP},{#UPLINK}]'
+            - uuid: 22f7accf9d184f7fb24993fae4d2ea7f
+              name: 'Uplink [{#IP}]: [{#UPLINK}]: Loss'
+              ymin_type_1: FIXED
+              graph_items:
+                - color: 199C0D
+                  item:
+                    host: 'Cisco Meraki device by Zabbix trapper'
+                    key: 'meraki.device.loss.pct[{#IP},{#UPLINK}]'
+      macros:
+        - macro: '{$MERAKI.DEVICE.LATENCY}'
+          value: '0.15'
+          description: 'Limiar de latencia do uplink, em segundos.'
+        - macro: '{$MERAKI.DEVICE.LOSS}'
+          value: '15'
+          description: 'Limiar de perda do uplink, em percentual.'
+        - macro: '{$MERAKI.DEVICE.LOSS.LATENCY.IP.MATCHES}'
+          value: '^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$'
+          description: 'Filtro de discovery de uplinks por IP.'
+        - macro: '{$MERAKI.DEVICE.LOSS.LATENCY.IP.NOT_MATCHES}'
+          value: ^null$
+          description: 'Filtro de exclusao de discovery de uplinks por IP.'
+        - macro: '{$MERAKI.DEVICE.UPLINK.MATCHES}'
+          value: '.*'
+          description: 'Filtro de discovery de uplinks por interface.'
+        - macro: '{$MERAKI.DEVICE.UPLINK.NOT_MATCHES}'
+          value: ^null$
+          description: 'Filtro de exclusao de discovery de uplinks por interface.'
+      valuemaps:
+        - uuid: bc51ee6ba46c46ceaecba524ab26fcee
+          name: 'Device status'
+          mappings:
+            - value: '0'
+              newvalue: offline
+            - value: '1'
+              newvalue: online
+            - value: '2'
+              newvalue: dormant
+            - value: '3'
+              newvalue: alerting
+            - value: '10'
+              newvalue: unknown
+      tags:
+        - tag: class
+          value: network
+        - tag: target
+          value: cisco-meraki-dashboard
